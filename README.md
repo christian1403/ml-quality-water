@@ -45,6 +45,14 @@ Based on WHO and EPA guidelines:
 5. Make predictions: `python main.py --predict [TDS] [Turbidity] [pH]`
 6. Analyze Data: `python main.py --analyze`
 7. Interactive: `python main.py --interactive`
+8. Run Streamlit:
+```bash
+    streamlit run streamlit.py
+```
+9. Run FastApi:
+```bash
+    uvicorn src.api.fastapi_server:app --host 0.0.0.0 --port 8000
+```
 
 ## Model Performance Metrics
 The model will be evaluated using:
