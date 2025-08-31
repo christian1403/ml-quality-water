@@ -58,13 +58,13 @@ class WaterQualityPreprocessor:
         
         results = [X_train_scaled]
         
-        # Transform validation and test sets
+        # Transform validation and test sets (DO NOT refit!)
         if X_val is not None:
-            X_val_scaled = self.scaler.fit_transform(X_val)
+            X_val_scaled = self.scaler.transform(X_val)
             results.append(X_val_scaled)
         
         if X_test is not None:
-            X_test_scaled = self.scaler.fit_transform(X_test)
+            X_test_scaled = self.scaler.transform(X_test)
             results.append(X_test_scaled)
         
         return results if len(results) > 1 else results[0]
@@ -170,8 +170,8 @@ class WaterQualityPreprocessor:
             'ph': [ph]
         })
         
-        # Scale using fitted scaler
-        sample_scaled = self.scaler.fit_transform(sample_df)
+        # Scale using fitted scaler (DO NOT refit!)
+        sample_scaled = self.scaler.transform(sample_df)
         
         return sample_scaled
     

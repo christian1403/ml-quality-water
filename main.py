@@ -43,6 +43,9 @@ def train_model():
     # Preprocess data
     processed_data = preprocessor.preprocess_pipeline(df)
     
+    # Set the model's preprocessor to the fitted one
+    model.preprocessor = preprocessor
+    
     # Train model
     history = model.train(processed_data)
     

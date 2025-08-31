@@ -213,10 +213,9 @@ class WaterQualityModel:
         self.model.save(filepath)
         print(f"Model saved to {filepath}")
         
-        # Save preprocessor
+        # Save preprocessor using its own save method
         preprocessor_path = filepath.replace('.h5', '_preprocessor.pkl')
-        joblib.dump(self.preprocessor, preprocessor_path)
-        print(f"Preprocessor saved to {preprocessor_path}")
+        self.preprocessor.save_preprocessor(preprocessor_path)
     
     def load_model(self, filepath='models/water_quality_model.h5'):
         """Load saved model"""
@@ -226,8 +225,9 @@ class WaterQualityModel:
         # Load preprocessor
         preprocessor_path = filepath.replace('.h5', '_preprocessor.pkl')
         if os.path.exists(preprocessor_path):
-            self.preprocessor = joblib.load(preprocessor_path)
-            print(f"Preprocessor loaded from {preprocessor_path}")
+            self.preprocessor = WaterQualityPreprocessor.load_preprocessor(preprocessor_path)
+        else:
+            print(f"Preprocessor file {preprocessor_path} not found")
     
     def predict_single(self, tds, turbidity, ph):
         """Make prediction for a single water sample"""
