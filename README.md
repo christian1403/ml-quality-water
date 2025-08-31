@@ -49,10 +49,23 @@ Based on WHO and EPA guidelines:
 ```bash
     streamlit run streamlit.py
 ```
-9. Run FastApi:
+9. Run FastApi with AI summaries:
 ```bash
+    # First configure Gemini API key (optional)
+    python setup_gemini.py
+    
+    # Start the API server
     uvicorn src.api.fastapi_server:app --host 0.0.0.0 --port 8000
+    
+    # Test the API
+    python test_api.py
 ```
+
+## New AI Features
+- **🤖 Gemini AI Integration**: Human-readable water quality summaries
+- **📊 Enhanced API**: Smart explanations for consumers
+- **🔍 Comprehensive Analysis**: Technical + AI-powered insights
+- **⚡ Real-time Processing**: Sub-second predictions with AI summaries
 
 ## Model Performance Metrics
 The model will be evaluated using:

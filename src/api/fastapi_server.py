@@ -4,15 +4,18 @@ FastAPI web service for water quality prediction
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import numpy as np
 import uvicorn
 import sys
 import os
+import google.generativeai as genai
+from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.predict import WaterQualityPredictor
 from src.utils.analysis_utils import validate_sensor_reading, get_water_quality_guidelines
+from config.config import GEMINI_CONFIG
 
 app = FastAPI(
     title="Water Quality Prediction API",
@@ -22,6 +25,91 @@ app = FastAPI(
 
 # Global predictor instance
 predictor = None
+
+# Initialize Gemini AI
+def init_gemini():
+    """Initialize Gemini AI with API key"""
+    print(GEMINI_CONFIG['api_key'])
+    if GEMINI_CONFIG['api_key']:
+        try:
+            genai.configure(api_key=GEMINI_CONFIG['api_key'])
+            return genai.GenerativeModel(GEMINI_CONFIG['model_name'])
+        except Exception as e:
+            print(f"Failed to initialize Gemini AI: {e}")
+            return None
+    else:
+        print("Warning: Gemini API key not configured. Summary feature will be disabled.")
+        return None
+
+# Global Gemini model instance
+gemini_model = None
+
+def generate_water_quality_summary(prediction_result: dict) -> Optional[str]:
+    """
+    Generate human-readable water quality summary using Gemini AI
+    
+    Args:
+        prediction_result: The ML prediction result dictionary
+    
+    Returns:
+        Human-readable summary string or None if Gemini is not available
+    """
+    global gemini_model
+    
+    if gemini_model is None:
+        return None
+    
+    try:
+        # Extract data from prediction result
+        input_data = prediction_result['input']
+        prediction = prediction_result['prediction']
+        probabilities = prediction_result['probabilities']
+        recommendation = prediction_result['recommendation']
+        
+        # Create a comprehensive prompt
+        prompt = f"""
+        You are a water quality expert. Based on the following scientific water quality analysis results, provide a clear, human-readable summary for general consumers.
+
+        **Sensor Measurements:**
+        - TDS (Total Dissolved Solids): {input_data['tds']} mg/L
+        - Turbidity: {input_data['turbidity']} NTU
+        - pH Level: {input_data['ph']}
+
+        **AI Model Prediction:**
+        - Quality Classification: {prediction['quality_label']}
+        - Confidence Level: {prediction['confidence']:.1%}
+
+        **Detailed Probabilities:**
+        - Poor Quality: {probabilities['Poor']:.1%}
+        - Acceptable Quality: {probabilities['Acceptable']:.1%}
+        - Good Quality: {probabilities['Good']:.1%}
+        - Excellent Quality: {probabilities['Excellent']:.1%}
+
+        **Technical Recommendation:** {recommendation}
+
+        Please provide a 2-3 sentence summary that:
+        1. Explains what these results mean in simple terms
+        2. Highlights any concerning parameters
+        3. Gives practical advice for the consumer
+        4. Uses everyday language (avoid technical jargon)
+
+        Keep it concise, informative, and actionable for someone without technical background. Describe it in Indonesia language
+        """
+        
+        # Generate summary using Gemini
+        response = gemini_model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=GEMINI_CONFIG['temperature'],
+                max_output_tokens=GEMINI_CONFIG['max_output_tokens']
+            )
+        )
+        
+        return response.text.strip()
+        
+    except Exception as e:
+        print(f"Failed to generate summary with Gemini: {e}")
+        return None
 
 class WaterSample(BaseModel):
     """Water sample data model"""
@@ -35,13 +123,21 @@ class BatchWaterSamples(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model on startup"""
-    global predictor
+    """Load model and initialize Gemini on startup"""
+    global predictor, gemini_model
+    
     try:
         predictor = WaterQualityPredictor()
         print("Water quality prediction model loaded successfully")
     except Exception as e:
         print(f"Failed to load model: {e}")
+    
+    # Initialize Gemini AI
+    gemini_model = init_gemini()
+    if gemini_model:
+        print("Gemini AI initialized successfully")
+    else:
+        print("Gemini AI not available - summary feature disabled")
 
 @app.get("/")
 async def root():
@@ -77,7 +173,7 @@ async def predict_water_quality(sample: WaterSample):
         sample: Water sample with TDS, turbidity, and pH values
     
     Returns:
-        Prediction results with quality class, confidence, and recommendations
+        Prediction results with quality class, confidence, recommendations, and AI-generated summary
     """
     if predictor is None or predictor.model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
@@ -102,6 +198,16 @@ async def predict_water_quality(sample: WaterSample):
         # Add validation warnings if any
         if validation['warnings']:
             result['warnings'] = validation['warnings']
+        
+        # Generate AI-powered summary using Gemini
+        summary = generate_water_quality_summary(result)
+        if summary:
+            result['summary'] = summary
+        else:
+            result['summary'] = "AI summary not available. Please check Gemini API configuration."
+        
+        # Add timestamp
+        result['timestamp'] = datetime.now().isoformat()
         
         return result
         
@@ -261,6 +367,52 @@ async def analyze_water_sample(sample: WaterSample):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+def calculate_water_quality_index(tds: float, turbidity: float, ph: float) -> float:
+    """
+    Calculate Water Quality Index (WQI) based on sensor readings
+    
+    Args:
+        tds: Total Dissolved Solids (mg/L)
+        turbidity: Turbidity (NTU)
+        ph: pH level
+    
+    Returns:
+        Water Quality Index (0-100 scale)
+    """
+    # pH sub-index (ideal range: 7.0-7.5)
+    if 7.0 <= ph <= 7.5:
+        ph_index = 100
+    elif 6.5 <= ph <= 8.5:
+        ph_index = 80 - abs(ph - 7.25) * 20
+    elif 6.0 <= ph <= 9.0:
+        ph_index = 60 - abs(ph - 7.25) * 10
+    else:
+        ph_index = max(0, 40 - abs(ph - 7.25) * 10)
+    
+    # TDS sub-index
+    if tds <= 300:
+        tds_index = 100
+    elif tds <= 600:
+        tds_index = 100 - (tds - 300) / 3
+    elif tds <= 900:
+        tds_index = 60 - (tds - 600) / 7.5
+    else:
+        tds_index = max(0, 20 - (tds - 900) / 50)
+    
+    # Turbidity sub-index
+    if turbidity <= 1:
+        turbidity_index = 100
+    elif turbidity <= 4:
+        turbidity_index = 100 - (turbidity - 1) * 10
+    elif turbidity <= 10:
+        turbidity_index = 60 - (turbidity - 4) * 5
+    else:
+        turbidity_index = max(0, 30 - (turbidity - 10) * 3)
+    
+    # Calculate weighted WQI (pH is most critical)
+    wqi = (ph_index * 0.4 + tds_index * 0.3 + turbidity_index * 0.3)
+    return min(100, max(0, wqi))
 
 def _get_overall_assessment(quality_class, wqi):
     """Generate overall assessment"""

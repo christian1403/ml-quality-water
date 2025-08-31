@@ -2,6 +2,12 @@
 Configuration file for water quality prediction model
 """
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
 # Model Configuration
 MODEL_CONFIG = {
     'input_features': ['tds', 'turbidity', 'ph'],
@@ -60,4 +66,12 @@ DATA_CONFIG = {
     'n_samples': 10000,
     'noise_factor': 0.1,
     'output_file': 'data/water_quality_dataset.csv'
+}
+
+# Gemini AI Configuration
+GEMINI_CONFIG = {
+    'api_key': os.getenv('GEMINI_API_KEY', ''),  # Set via environment variable or fill directly
+    'model_name': 'gemini-1.5-flash',
+    'temperature': 0.7,
+    'max_output_tokens': 500
 }
