@@ -1,5 +1,5 @@
 """
-Data preprocessing utilities for water quality prediction
+Enhanced data preprocessing utilities for water quality prediction with feature engineering
 """
 
 import numpy as np
@@ -14,21 +14,32 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import MODEL_CONFIG
+from src.data_processing.feature_engineer import feature_engineer
 
 class WaterQualityPreprocessor:
-    """Preprocessing pipeline for water quality data"""
+    """Enhanced preprocessing pipeline with advanced feature engineering"""
     
-    def __init__(self):
+    def __init__(self, use_feature_engineering=True):
         self.scaler = StandardScaler()
         self.label_encoder = LabelEncoder()
         self.feature_names = MODEL_CONFIG['input_features']
         self.target_name = MODEL_CONFIG['target']
+        self.use_feature_engineering = use_feature_engineering
+        self.engineered_feature_names = []
         
     def load_data(self, filepath):
-        """Load data from CSV file"""
+        """Load data from CSV file with optional feature engineering"""
         try:
             df = pd.read_csv(filepath)
             print(f"Data loaded successfully: {df.shape}")
+            
+            # Apply feature engineering if enabled
+            if self.use_feature_engineering:
+                print("🔧 Applying advanced feature engineering...")
+                df = feature_engineer.engineer_features(df)
+                self.engineered_feature_names = feature_engineer.feature_names
+                print(f"Enhanced data shape: {df.shape}")
+            
             return df
         except FileNotFoundError:
             print(f"File {filepath} not found. Please run data generation first.")
@@ -39,8 +50,19 @@ class WaterQualityPreprocessor:
     
     def prepare_features_and_target(self, df):
         """Extract features and target from dataframe"""
+        # Base features
+        base_features = self.feature_names.copy()
+        
+        # Add engineered features if available
+        if self.use_feature_engineering and self.engineered_feature_names:
+            all_features = base_features + self.engineered_feature_names
+            print(f"📊 Using {len(base_features)} base + {len(self.engineered_feature_names)} engineered features")
+        else:
+            all_features = base_features
+            print(f"📊 Using {len(base_features)} base features only")
+        
         # Features
-        X = df[self.feature_names].copy()
+        X = df[all_features].copy()
         
         # Target
         y = df[self.target_name].copy()
@@ -175,6 +197,41 @@ class WaterQualityPreprocessor:
         
         return sample_scaled
     
+    def preprocess_single_sample(self, tds, turbidity, ph):
+        """
+        Preprocess a single sample for prediction (with feature engineering support)
+        
+        Args:
+            tds: Total Dissolved Solids
+            turbidity: Turbidity
+            ph: pH level
+            
+        Returns:
+            Scaled feature array ready for prediction
+        """
+        # Create DataFrame for the sample
+        sample_data = pd.DataFrame({
+            'tds': [tds],
+            'turbidity': [turbidity], 
+            'ph': [ph]
+        })
+        
+        # Apply feature engineering if enabled
+        if self.use_feature_engineering:
+            sample_data = feature_engineer.engineer_features(sample_data)
+        
+        # Get all required features
+        if self.use_feature_engineering and self.engineered_feature_names:
+            all_features = self.feature_names + self.engineered_feature_names
+        else:
+            all_features = self.feature_names
+        
+        # Select features and scale
+        sample_features = sample_data[all_features].values
+        sample_scaled = self.scaler.transform(sample_features)
+        
+        return sample_scaled
+    
     def save_preprocessor(self, filepath):
         """Save the preprocessor to file"""
         import pickle
@@ -196,7 +253,8 @@ def main():
     preprocessor = WaterQualityPreprocessor()
     
     # Load data
-    df = preprocessor.load_data('data/water_quality_dataset.csv')
+    # df = preprocessor.load_data('data/water_quality_dataset.csv')
+    df = preprocessor.load_data('data/water_quality_resampled.csv')
     if df is None:
         print("Please run data generation first: python src/data_processing/generate_data.py")
         return
