@@ -15,7 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.models.predict import WaterQualityPredictor
 from src.utils.analysis_utils import validate_sensor_reading, get_water_quality_guidelines
-from config.config import GEMINI_CONFIG
+from config.config import GEMINI_CONFIG, QUALITY_LABELS
 
 app = FastAPI(
     title="Water Quality Prediction API",
@@ -127,10 +127,13 @@ async def startup_event():
     global predictor, gemini_model
     
     try:
+        # Try to load the predictor - don't fail if models aren't available
         predictor = WaterQualityPredictor()
         print("Water quality prediction model loaded successfully")
     except Exception as e:
-        print(f"Failed to load model: {e}")
+        print(f"Warning: Failed to load model: {e}")
+        print("API will run in demo mode - some endpoints may not be available")
+        predictor = None
     
     # Initialize Gemini AI
     gemini_model = init_gemini()
@@ -145,12 +148,15 @@ async def root():
     return {
         "message": "Water Quality Prediction API",
         "version": "1.0.0",
+        "status": "ready" if predictor else "demo-mode",
         "endpoints": {
-            "/predict": "Single water quality prediction",
-            "/predict/batch": "Batch water quality predictions",
+            "/predict": "Single water quality prediction (requires ML model)",
+            "/predict/demo": "Demo water quality prediction (rule-based, always available)",
+            "/predict/batch": "Batch water quality predictions (requires ML model)",
             "/guidelines": "Water quality guidelines",
             "/health": "API health check"
-        }
+        },
+        "note": "If ML model is not available, use /predict/demo endpoint for testing"
     }
 
 @app.get("/health")
@@ -195,6 +201,23 @@ async def predict_water_quality(sample: WaterSample):
         if "error" in result:
             raise HTTPException(status_code=400, detail=result['error'])
         
+        # Convert NumPy types to native Python types for JSON serialization
+        def convert_numpy_types(obj):
+            """Recursively convert NumPy types to native Python types"""
+            if isinstance(obj, dict):
+                return {key: convert_numpy_types(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
+            elif hasattr(obj, 'item'):  # NumPy scalar
+                return obj.item()
+            elif hasattr(obj, 'tolist'):  # NumPy array
+                return obj.tolist()
+            else:
+                return obj
+        
+        # Convert all NumPy types in the result
+        result = convert_numpy_types(result)
+        
         # Add validation warnings if any
         if validation['warnings']:
             result['warnings'] = validation['warnings']
@@ -233,6 +256,20 @@ async def predict_batch_water_quality(batch: BatchWaterSamples):
     try:
         results = []
         
+        # Helper function to convert NumPy types
+        def convert_numpy_types(obj):
+            """Recursively convert NumPy types to native Python types"""
+            if isinstance(obj, dict):
+                return {key: convert_numpy_types(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
+            elif hasattr(obj, 'item'):  # NumPy scalar
+                return obj.item()
+            elif hasattr(obj, 'tolist'):  # NumPy array
+                return obj.tolist()
+            else:
+                return obj
+        
         for i, sample in enumerate(batch.samples):
             try:
                 # Validate and predict for each sample
@@ -257,6 +294,8 @@ async def predict_batch_water_quality(batch: BatchWaterSamples):
                         "error": result['error']
                     })
                 else:
+                    # Convert NumPy types
+                    result = convert_numpy_types(result)
                     result['sample_index'] = i
                     if validation['warnings']:
                         result['warnings'] = validation['warnings']
@@ -322,11 +361,28 @@ async def analyze_water_sample(sample: WaterSample):
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
+        # Helper function to convert NumPy types
+        def convert_numpy_types(obj):
+            """Recursively convert NumPy types to native Python types"""
+            if isinstance(obj, dict):
+                return {key: convert_numpy_types(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(item) for item in obj]
+            elif hasattr(obj, 'item'):  # NumPy scalar
+                return obj.item()
+            elif hasattr(obj, 'tolist'):  # NumPy array
+                return obj.tolist()
+            else:
+                return obj
+        
         # Get ML prediction
         ml_result = predictor.predict(sample.tds, sample.turbidity, sample.ph)
         
         if "error" in ml_result:
             raise HTTPException(status_code=400, detail=ml_result['error'])
+        
+        # Convert NumPy types in ML result
+        ml_result = convert_numpy_types(ml_result)
         
         # Calculate Water Quality Index
         wqi = calculate_water_quality_index(sample.tds, sample.turbidity, sample.ph)
@@ -423,9 +479,112 @@ def _get_overall_assessment(quality_class, wqi):
     else:
         return "Treatment or filtration recommended before consumption"
 
+@app.post("/predict/demo")
+async def predict_water_quality_demo(sample: WaterSample):
+    """
+    Demo water quality prediction using rule-based system
+    Works without ML model for testing/demo purposes
+    
+    Args:
+        sample: Water sample with TDS, turbidity, and pH values
+    
+    Returns:
+        Demo prediction results with quality assessment
+    """
+    try:
+        # Validate sensor readings
+        validation = validate_sensor_reading(
+            tds=sample.tds, 
+            turbidity=sample.turbidity, 
+            ph=sample.ph
+        )
+        
+        if not validation['valid']:
+            raise HTTPException(status_code=400, detail=validation['errors'])
+        
+        # Simple rule-based classification for demo
+        score = 0
+        
+        # pH scoring (0-40 points)
+        if 7.0 <= sample.ph <= 7.5:
+            score += 40
+        elif 6.5 <= sample.ph <= 8.5:
+            score += 30
+        elif 6.0 <= sample.ph <= 9.0:
+            score += 20
+        else:
+            score += 10
+        
+        # TDS scoring (0-35 points)
+        if sample.tds <= 300:
+            score += 35
+        elif sample.tds <= 600:
+            score += 25
+        elif sample.tds <= 900:
+            score += 15
+        else:
+            score += 5
+        
+        # Turbidity scoring (0-25 points)
+        if sample.turbidity <= 1:
+            score += 25
+        elif sample.turbidity <= 4:
+            score += 20
+        elif sample.turbidity <= 10:
+            score += 10
+        else:
+            score += 5
+        
+        # Determine quality class
+        if score >= 80:
+            quality_class = 3  # Excellent
+            confidence = 0.9
+        elif score >= 65:
+            quality_class = 2  # Good
+            confidence = 0.8
+        elif score >= 45:
+            quality_class = 1  # Acceptable
+            confidence = 0.7
+        else:
+            quality_class = 0  # Poor
+            confidence = 0.6
+        
+        result = {
+            "quality_class": quality_class,
+            "quality_label": QUALITY_LABELS[quality_class],
+            "confidence": confidence,
+            "prediction_score": score / 100.0,
+            "wqi_score": score,
+            "parameters": {
+                "tds": sample.tds,
+                "turbidity": sample.turbidity,
+                "ph": sample.ph
+            },
+            "assessment": _get_overall_assessment(quality_class, score),
+            "recommendations": get_water_quality_guidelines(),
+            "mode": "demo",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Add validation warnings if any
+        if validation['warnings']:
+            result['warnings'] = validation['warnings']
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Demo prediction failed: {str(e)}")
+
 if __name__ == "__main__":
     print("Starting Water Quality Prediction API...")
     print("API will be available at: http://localhost:8000")
     print("Interactive documentation: http://localhost:8000/docs")
     
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    if os.getenv("ENVIRONMENT") == "production":
+        print("Running in production mode")
+        uvicorn.run(app)
+    else:
+        print("Running in development mode")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
