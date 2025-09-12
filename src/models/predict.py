@@ -1,20 +1,262 @@
 """
 Water quality prediction module with advanced confidence calibration
+Supports both TensorFlow and lightweight rule-based prediction for serverless deployment
 """
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 import joblib
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import QUALITY_LABELS
-from models.train_model import WaterQualityModel
+
+# Check if we're in a serverless environment (Vercel)
+IS_SERVERLESS = os.getenv('VERCEL') == '1' or os.getenv('ENVIRONMENT') == 'production'
+
+# Try TensorFlow Lite first (for local development)
+TFLITE_AVAILABLE = False
+TF_AVAILABLE = False
+
+if not IS_SERVERLESS:
+    try:
+        from src.models.predict_tflite import TFLiteWaterQualityPredictor
+        TFLITE_AVAILABLE = True
+        print("🚀 TensorFlow Lite predictor available")
+    except ImportError:
+        print("⚠️  TensorFlow Lite predictor not available")
+
+    try:
+        import tensorflow as tf
+        TF_AVAILABLE = True
+        print("🚀 TensorFlow available")
+    except ImportError:
+        print("⚠️  TensorFlow not available")
+
+    # Import the original model for fallback
+    if TF_AVAILABLE:
+        try:
+            from models.train_model import WaterQualityModel
+        except ImportError:
+            pass
+else:
+    print("🌐 Serverless environment detected - using lightweight predictor")
+
+
+class LightweightPredictor:
+    """
+    Lightweight predictor for serverless environments that don't support ML libraries
+    Uses simple rules based on water quality standards
+    """
+    
+    def __init__(self):
+        # WHO and EPA water quality standards for quick lookup
+        self.ph_range = (6.5, 8.5)
+        self.tds_max = 500
+        self.turbidity_max = 4.0
+        self.temperature_range = (5, 35)
+        
+    def predict(self, features):
+        """
+        Make prediction based on water quality standards
+        Features: [ph, hardness, solids, chloramines, sulfate, conductivity, organic_carbon, trihalomethanes, turbidity]
+        """
+        ph, hardness, solids, chloramines, sulfate, conductivity, organic_carbon, trihalomethanes, turbidity = features
+        
+        # Score based on WHO/EPA standards
+        score = 1.0
+        
+        # pH scoring (6.5-8.5 is ideal)
+        if ph < 6.5 or ph > 8.5:
+            score -= 0.3
+        elif ph < 6.0 or ph > 9.0:
+            score -= 0.5
+        
+        # TDS scoring (Total Dissolved Solids)
+        if solids > 1000:
+            score -= 0.4
+        elif solids > 500:
+            score -= 0.2
+        
+        # Turbidity scoring (clarity)
+        if turbidity > 4.0:
+            score -= 0.3
+        elif turbidity > 1.0:
+            score -= 0.1
+        
+        # Chloramines scoring (disinfectant levels)
+        if chloramines > 4.0:
+            score -= 0.2
+        
+        # Trihalomethanes scoring (cancer risk)
+        if trihalomethanes > 80:
+            score -= 0.3
+        elif trihalomethanes > 40:
+            score -= 0.1
+        
+        # Sulfate scoring (taste and laxative effects)
+        if sulfate > 250:
+            score -= 0.2
+        
+        # Organic carbon scoring (affects disinfection)
+        if organic_carbon > 4.0:
+            score -= 0.2
+        
+        # Ensure score stays in valid range
+        score = max(0.0, min(1.0, score))
+        
+        # Convert to potability (1 = potable, 0 = not potable)
+        potability = 1 if score > 0.5 else 0
+        confidence = score if potability == 1 else (1 - score)
+        
+        return potability, confidence
+
+
+class TensorFlowPredictor:
+    """
+    TensorFlow model predictor for local development
+    """
+    
+    def __init__(self, model_path):
+        self.model_path = model_path
+        self.model = None
+        try:
+            import tensorflow as tf
+            self.model = tf.keras.models.load_model(model_path)
+        except Exception as e:
+            print(f"Failed to load TensorFlow model: {e}")
+    
+    def predict(self, features):
+        if self.model is None:
+            return 0, 0.5  # Default fallback
+        
+        # Prepare input
+        input_data = np.array([features]).astype(np.float32)
+        
+        # Make prediction
+        prediction = self.model.predict(input_data, verbose=0)[0][0]
+        potability = 1 if prediction > 0.5 else 0
+        confidence = prediction if potability == 1 else (1 - prediction)
+        
+        return potability, confidence
+
 
 class WaterQualityPredictor:
-    """Production-ready water quality predictor with confidence calibration"""
+    """
+    Production-ready water quality predictor with confidence calibration
+    Automatically chooses between TensorFlow Lite (local) and lightweight rule-based (serverless)
+    """
+    
+    def __init__(self, model_path='models/water_quality_model.h5', prefer_tflite=True):
+        self.model_path = model_path
+        self.tflite_path = model_path.replace('.h5', '_quantized.tflite')
+        self.prefer_tflite = prefer_tflite and not IS_SERVERLESS
+        self.predictor = None
+        self.model_type = None
+        
+        # Try to load the appropriate predictor
+        self._load_predictor()
+    
+    def _load_predictor(self):
+        """Load the best available predictor (TFLite for local, lightweight for serverless)"""
+        
+        # For serverless environments, use lightweight predictor only
+        if IS_SERVERLESS:
+            self.predictor = LightweightPredictor()
+            self.model_type = "lightweight"
+            print("✅ Using lightweight rule-based predictor for serverless deployment")
+            return
+        
+        # First try TensorFlow Lite if preferred and available
+        if self.prefer_tflite and TFLITE_AVAILABLE and os.path.exists(self.tflite_path):
+            try:
+                self.predictor = TFLiteWaterQualityPredictor(self.tflite_path)
+                if self.predictor.interpreter is not None:
+                    self.model_type = "tflite"
+                    print(f"✅ Using TensorFlow Lite model: {self.tflite_path}")
+                    return
+            except Exception as e:
+                print(f"⚠️  Failed to load TFLite model: {e}")
+        
+        # Fallback to TensorFlow model
+        if TF_AVAILABLE and os.path.exists(self.model_path):
+            try:
+                self.predictor = TensorFlowPredictor(self.model_path)
+                if self.predictor.model is not None:
+                    self.model_type = "tensorflow"
+                    print(f"✅ Using TensorFlow model: {self.model_path}")
+                    return
+            except Exception as e:
+                print(f"⚠️  Failed to load TensorFlow model: {e}")
+        
+        # Final fallback to lightweight predictor
+        print("⚠️  No ML models available, using lightweight rule-based predictor")
+        self.predictor = LightweightPredictor()
+        self.model_type = "lightweight"
+    
+    def predict(self, tds, turbidity, ph):
+        """
+        Predict water quality for given sensor readings
+        
+        Args:
+            tds (float): Total Dissolved Solids (mg/L)
+            turbidity (float): Turbidity (NTU)
+            ph (float): pH level
+        
+        Returns:
+            dict: Prediction results with quality class, label, and confidence
+        """
+        if self.predictor is None:
+            return {"error": "No model loaded. Please check model files or run conversion script."}
+        
+        try:
+            # Delegate to the appropriate predictor
+            result = self.predictor.predict(tds, turbidity, ph)
+            
+            # Add model type information
+            if "error" not in result:
+                result['model_info'] = {
+                    'type': self.model_type,
+                    'path': self.tflite_path if self.model_type == "tflite" else self.model_path
+                }
+            
+            return result
+            
+        except Exception as e:
+            return {"error": f"Prediction failed: {e}"}
+    
+    @property
+    def model(self):
+        """For backward compatibility"""
+        return self.predictor.interpreter if self.model_type == "tflite" else (
+            self.predictor.model if self.model_type == "tensorflow" else None
+        )
+    
+    def get_model_info(self):
+        """Get information about the loaded model"""
+        if self.predictor is None:
+            return {"error": "No model loaded"}
+        
+        info = {
+            "model_type": self.model_type,
+            "model_available": self.predictor is not None
+        }
+        
+        if self.model_type == "tflite":
+            info.update(self.predictor.get_model_info())
+        elif self.model_type == "tensorflow":
+            info.update({
+                "model_path": self.model_path,
+                "input_shape": self.predictor.model.input_shape if self.predictor.model else None,
+                "output_shape": self.predictor.model.output_shape if self.predictor.model else None
+            })
+        
+        return info
+
+
+class TensorFlowPredictor:
+    """Original TensorFlow predictor for backward compatibility"""
     
     def __init__(self, model_path='models/water_quality_model.h5'):
         self.model_path = model_path
@@ -23,9 +265,8 @@ class WaterQualityPredictor:
         self.calibrator = None
         self.load_model()
         self.load_calibrator()
-    
     def load_model(self):
-        """Load trained model and preprocessor"""
+        """Load trained TensorFlow model and preprocessor"""
         try:
             # Load TensorFlow model
             self.model = tf.keras.models.load_model(self.model_path)

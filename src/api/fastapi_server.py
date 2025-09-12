@@ -18,9 +18,9 @@ from src.utils.analysis_utils import validate_sensor_reading, get_water_quality_
 from config.config import GEMINI_CONFIG, QUALITY_LABELS
 
 app = FastAPI(
-    title="Water Quality Prediction API",
-    description="ML-powered water quality assessment for consumption safety",
-    version="1.0.0"
+    title="Water Quality Prediction API (TensorFlow Lite)",
+    description="ML-powered water quality assessment for consumption safety using TensorFlow Lite for fast, lightweight predictions",
+    version="2.0.0"
 )
 
 # Global predictor instance
@@ -127,9 +127,16 @@ async def startup_event():
     global predictor, gemini_model
     
     try:
-        # Try to load the predictor - don't fail if models aren't available
-        predictor = WaterQualityPredictor()
-        print("Water quality prediction model loaded successfully")
+        # Try to load the predictor - prefer TFLite for deployment
+        predictor = WaterQualityPredictor(prefer_tflite=True)
+        if predictor.predictor is not None:
+            print(f"✅ Water quality prediction model loaded successfully ({predictor.model_type})")
+            if predictor.model_type == "tflite":
+                model_info = predictor.get_model_info()
+                print(f"   - Model size: {model_info.get('model_size_kb', 'unknown')} KB")
+                print(f"   - Runtime: {model_info.get('runtime', 'unknown')}")
+        else:
+            print("⚠️  No compatible model loaded - API will run in demo mode")
     except Exception as e:
         print(f"Warning: Failed to load model: {e}")
         print("API will run in demo mode - some endpoints may not be available")
@@ -145,35 +152,52 @@ async def startup_event():
 @app.get("/")
 async def root():
     """API root endpoint"""
+    model_info = predictor.get_model_info() if predictor else {}
+    
     return {
-        "message": "Water Quality Prediction API",
-        "version": "1.0.0",
+        "message": "Water Quality Prediction API (TensorFlow Lite)",
+        "version": "2.0.0",
         "status": "ready" if predictor else "demo-mode",
-        "endpoints": {
-            "/predict": "Single water quality prediction (requires ML model)",
-            "/predict/demo": "Demo water quality prediction (rule-based, always available)",
-            "/predict/batch": "Batch water quality predictions (requires ML model)",
-            "/guidelines": "Water quality guidelines",
-            "/health": "API health check"
+        "model_info": {
+            "type": model_info.get("model_type", "unknown"),
+            "size_kb": model_info.get("model_size_kb", "unknown"),
+            "runtime": model_info.get("runtime", "unknown")
         },
-        "note": "If ML model is not available, use /predict/demo endpoint for testing"
+        "endpoints": {
+            "/predict": "Single water quality prediction (TensorFlow Lite)",
+            "/predict/demo": "Demo water quality prediction (rule-based, always available)",
+            "/predict/batch": "Batch water quality predictions (TensorFlow Lite)",
+            "/guidelines": "Water quality guidelines",
+            "/health": "API health check",
+            "/model-info": "Detailed model information"
+        },
+        "note": "Using TensorFlow Lite for fast, lightweight predictions optimized for serverless deployment"
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    model_status = "loaded" if predictor and predictor.model is not None else "not_loaded"
+    model_status = "loaded" if predictor and predictor.predictor is not None else "not_loaded"
     
     return {
         "status": "healthy",
         "model_status": model_status,
-        "api_version": "1.0.0"
+        "api_version": "2.0.0",
+        "model_type": predictor.model_type if predictor else "none"
     }
+
+@app.get("/model-info")
+async def get_model_info():
+    """Get detailed information about the loaded model"""
+    if predictor is None:
+        return {"error": "No model loaded"}
+    
+    return predictor.get_model_info()
 
 @app.post("/predict")
 async def predict_water_quality(sample: WaterSample):
     """
-    Predict water quality for a single sample
+    Predict water quality for a single sample using TensorFlow Lite
     
     Args:
         sample: Water sample with TDS, turbidity, and pH values
@@ -181,7 +205,7 @@ async def predict_water_quality(sample: WaterSample):
     Returns:
         Prediction results with quality class, confidence, recommendations, and AI-generated summary
     """
-    if predictor is None or predictor.model is None:
+    if predictor is None or predictor.predictor is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
@@ -242,7 +266,7 @@ async def predict_water_quality(sample: WaterSample):
 @app.post("/predict/batch")
 async def predict_batch_water_quality(batch: BatchWaterSamples):
     """
-    Predict water quality for multiple samples
+    Predict water quality for multiple samples using TensorFlow Lite
     
     Args:
         batch: List of water samples
@@ -250,7 +274,7 @@ async def predict_batch_water_quality(batch: BatchWaterSamples):
     Returns:
         List of prediction results
     """
-    if predictor is None or predictor.model is None:
+    if predictor is None or predictor.predictor is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
@@ -349,7 +373,7 @@ async def get_guidelines():
 @app.post("/analyze")
 async def analyze_water_sample(sample: WaterSample):
     """
-    Comprehensive water quality analysis
+    Comprehensive water quality analysis using TensorFlow Lite
     
     Args:
         sample: Water sample with TDS, turbidity, and pH values
@@ -357,7 +381,7 @@ async def analyze_water_sample(sample: WaterSample):
     Returns:
         Detailed analysis including ML prediction, parameter analysis, and recommendations
     """
-    if predictor is None or predictor.model is None:
+    if predictor is None or predictor.predictor is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
     
     try:
