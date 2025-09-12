@@ -13,14 +13,14 @@ import google.generativeai as genai
 from datetime import datetime
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.models.predict import WaterQualityPredictor
+from src.models.predict_serverless import get_predictor, ServerlessWaterQualityPredictor
 from src.utils.analysis_utils import validate_sensor_reading, get_water_quality_guidelines
 from config.config import GEMINI_CONFIG, QUALITY_LABELS
 
 app = FastAPI(
     title="Water Quality Prediction API",
-    description="ML-powered water quality assessment for consumption safety",
-    version="1.0.0"
+    description="TensorFlow Lite-powered water quality assessment for consumption safety",
+    version="2.0.0"
 )
 
 # Global predictor instance
@@ -123,15 +123,15 @@ class BatchWaterSamples(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model and initialize Gemini on startup"""
+    """Load TFLite model and initialize Gemini on startup"""
     global predictor, gemini_model
     
     try:
-        # Try to load the predictor - don't fail if models aren't available
-        predictor = WaterQualityPredictor()
-        print("Water quality prediction model loaded successfully")
+        # Load serverless-optimized TFLite predictor
+        predictor = get_predictor()
+        print("✅ Serverless TensorFlow Lite predictor initialized successfully")
     except Exception as e:
-        print(f"Warning: Failed to load model: {e}")
+        print(f"Warning: Failed to load serverless TFLite predictor: {e}")
         print("API will run in demo mode - some endpoints may not be available")
         predictor = None
     
@@ -147,27 +147,38 @@ async def root():
     """API root endpoint"""
     return {
         "message": "Water Quality Prediction API",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "model_type": "TensorFlow Lite Runtime (serverless optimized)",
+        "deployment": "Vercel-ready",
         "status": "ready" if predictor else "demo-mode",
         "endpoints": {
-            "/predict": "Single water quality prediction (requires ML model)",
+            "/predict": "Single water quality prediction (requires TFLite model)",
             "/predict/demo": "Demo water quality prediction (rule-based, always available)",
-            "/predict/batch": "Batch water quality predictions (requires ML model)",
+            "/predict/batch": "Batch water quality predictions (requires TFLite model)",
+            "/analyze": "Comprehensive water quality analysis",
             "/guidelines": "Water quality guidelines",
             "/health": "API health check"
         },
-        "note": "If ML model is not available, use /predict/demo endpoint for testing"
+        "features": {
+            "tflite_runtime": "Lightweight TensorFlow Lite inference",
+            "serverless_optimized": "Optimized for Vercel deployment",
+            "gemini_ai": "AI-powered water quality summaries",
+            "feature_engineering": "35 engineered features for accuracy"
+        },
+        "note": "If TFLite model is not available, use /predict/demo endpoint for testing"
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    model_status = "loaded" if predictor and predictor.model is not None else "not_loaded"
+    model_status = "loaded" if predictor and predictor.interpreter is not None else "not_loaded"
     
     return {
         "status": "healthy",
         "model_status": model_status,
-        "api_version": "1.0.0"
+        "model_type": "TensorFlow Lite",
+        "api_version": "2.0.0",
+        "serverless_ready": True
     }
 
 @app.post("/predict")
@@ -181,8 +192,8 @@ async def predict_water_quality(sample: WaterSample):
     Returns:
         Prediction results with quality class, confidence, recommendations, and AI-generated summary
     """
-    if predictor is None or predictor.model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    if predictor is None or predictor.interpreter is None:
+        raise HTTPException(status_code=503, detail="TFLite model not loaded")
     
     try:
         # Validate sensor readings
@@ -250,8 +261,8 @@ async def predict_batch_water_quality(batch: BatchWaterSamples):
     Returns:
         List of prediction results
     """
-    if predictor is None or predictor.model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    if predictor is None or predictor.interpreter is None:
+        raise HTTPException(status_code=503, detail="TFLite model not loaded")
     
     try:
         results = []
@@ -357,8 +368,8 @@ async def analyze_water_sample(sample: WaterSample):
     Returns:
         Detailed analysis including ML prediction, parameter analysis, and recommendations
     """
-    if predictor is None or predictor.model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded")
+    if predictor is None or predictor.interpreter is None:
+        raise HTTPException(status_code=503, detail="TFLite model not loaded")
     
     try:
         # Helper function to convert NumPy types

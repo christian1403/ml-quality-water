@@ -5,11 +5,15 @@
             "src": "api/index.py", 
             "use": "@vercel/python",
             "config": {
-                "maxLambdaSize": "50mb"
+                "maxLambdaSize": "50mb",
+                "runtime": "python3.9"
             }
         }
     ],
     "routes": [
         { "src": "/(.*)", "dest": "api/index.py" }
-    ]
+    ],
+    "env": {
+        "PYTHONPATH": "/var/task"
+    }
 }

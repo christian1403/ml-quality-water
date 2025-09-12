@@ -1,5 +1,5 @@
 """
-Water quality prediction module with TensorFlow Lite models and advanced confidence calibration
+TensorFlow Lite-based Water quality prediction module with advanced confidence calibration
 """
 
 import numpy as np
@@ -11,9 +11,6 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config.config import QUALITY_LABELS
-from models.train_model import WaterQualityModel
-
-# TensorFlow Lite interpreter handling
 try:
     # Try the newer LiteRT interpreter first
     from ai_edge_litert.python import interpreter as tflite_interpreter
