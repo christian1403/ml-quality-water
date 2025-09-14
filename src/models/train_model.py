@@ -22,51 +22,60 @@ from config.config import NN_CONFIG, QUALITY_LABELS, MODEL_CONFIG
 from data_processing.preprocessor import WaterQualityPreprocessor
 
 class WaterQualityModel:
-    """Neural Network model for water quality classification"""
+    """Enhanced Neural Network model for water quality classification with feature engineering"""
     
-    def __init__(self):
+    def __init__(self, use_feature_engineering=True):
         self.model = None
         self.history = None
-        self.preprocessor = WaterQualityPreprocessor()
+        self.preprocessor = WaterQualityPreprocessor(use_feature_engineering=use_feature_engineering)
+        self.use_feature_engineering = use_feature_engineering
         
     def build_model(self, input_dim=3, num_classes=4):
-        """Build neural network architecture"""
+        """Build enhanced neural network architecture for feature engineering"""
+        print(f"🏗️ Building enhanced model for {input_dim} input features...")
+        
         model = Sequential([
-            # Input layer with L2 regularization
+            # Input layer with larger capacity for engineered features
             Dense(NN_CONFIG['hidden_layers'][0], 
                   input_dim=input_dim,
                   activation=NN_CONFIG['activation'],
-                  kernel_regularizer=l2(0.001)),
-            BatchNormalization(),
-            Dropout(NN_CONFIG['dropout_rate']),
-            
-            # Hidden layers
-            Dense(NN_CONFIG['hidden_layers'][1],
-                  activation=NN_CONFIG['activation'],
-                  kernel_regularizer=l2(0.001)),
-            BatchNormalization(),
-            Dropout(NN_CONFIG['dropout_rate']),
-            
-            Dense(NN_CONFIG['hidden_layers'][2],
-                  activation=NN_CONFIG['activation'],
-                  kernel_regularizer=l2(0.001)),
-            BatchNormalization(),
-            Dropout(NN_CONFIG['dropout_rate']),
-            
-            # Output layer
-            Dense(num_classes, activation=NN_CONFIG['output_activation'])
+                  kernel_regularizer=l2(NN_CONFIG.get('l2_regularization', 0.0001))),
         ])
         
+        # Add batch normalization if enabled
+        if NN_CONFIG.get('use_batch_normalization', False):
+            model.add(BatchNormalization())
+            
+        model.add(Dropout(NN_CONFIG['dropout_rate']))
+        
+        # Build all hidden layers dynamically
+        for i, layer_size in enumerate(NN_CONFIG['hidden_layers'][1:], 1):
+            model.add(Dense(layer_size,
+                          activation=NN_CONFIG['activation'],
+                          kernel_regularizer=l2(NN_CONFIG.get('l2_regularization', 0.0001))))
+            
+            # Add batch normalization if enabled
+            if NN_CONFIG.get('use_batch_normalization', False):
+                model.add(BatchNormalization())
+                
+            model.add(Dropout(NN_CONFIG['dropout_rate']))
+        
+        # Output layer
+        model.add(Dense(num_classes, activation=NN_CONFIG['output_activation']))
+        
         # Compile model
+        optimizer = Adam(learning_rate=NN_CONFIG.get('learning_rate', 0.001))
         model.compile(
-            optimizer=Adam(learning_rate=0.001),
+            optimizer=optimizer,
             loss=NN_CONFIG['loss'],
             metrics=NN_CONFIG['metrics']
         )
         
         self.model = model
-        print("Model architecture built successfully")
+        print("✅ Enhanced model architecture built successfully")
+        print(f"📊 Model summary:")
         print(model.summary())
+        return model
         
         return model
     
@@ -96,9 +105,78 @@ class WaterQualityModel:
         
         return callbacks
     
-    def train(self, processed_data):
-        """Train the neural network model"""
-        print("=== Starting Model Training ===")
+    def train(self, data_input):
+        """
+        Train the neural network model - handles both data_path and processed_data
+        
+        Args:
+            data_input: Either a file path (str) or processed data (dict)
+        """
+        if isinstance(data_input, str):
+            # New enhanced training with feature engineering
+            return self._train_with_path(data_input)
+        else:
+            # Legacy training with processed data
+            return self._train_with_processed_data(data_input)
+    
+    def _train_with_path(self, data_path):
+        """Train with data path (enhanced version)"""
+        print("=== Starting Enhanced Model Training ===")
+        
+        # Load and preprocess data
+        df = self.preprocessor.load_data(data_path)
+        if df is None:
+            return False
+            
+        processed_data = self.preprocessor.preprocess_pipeline(df)
+        
+        # Extract training data
+        X_train = processed_data['X_train']
+        y_train = processed_data['y_train']
+        X_val = processed_data['X_val']
+        y_val = processed_data['y_val']
+        class_weights = processed_data['class_weights']
+        
+        print(f"🎯 Training with {X_train.shape[1]} features")
+        
+        # Build model if not already built
+        if self.model is None:
+            self.build_model(input_dim=X_train.shape[1])
+        
+        # Create callbacks
+        callbacks = self.create_callbacks()
+        
+        # Train model
+        self.history = self.model.fit(
+            X_train, y_train,
+            validation_data=(X_val, y_val),
+            epochs=NN_CONFIG['epochs'],
+            batch_size=NN_CONFIG['batch_size'],
+            class_weight=class_weights,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        print("=== Training Complete ===")
+        
+        # Evaluate on test set
+        X_test = processed_data['X_test']
+        y_test = processed_data['y_test']
+        y_test_raw = processed_data['y_test_raw']
+        
+        # Predictions
+        y_pred_proba = self.model.predict(X_test)
+        y_pred = np.argmax(y_pred_proba, axis=1)
+        
+        # Calculate metrics
+        test_accuracy = accuracy_score(y_test_raw, y_pred)
+        print(f"🎯 Test Accuracy: {test_accuracy:.4f}")
+        
+        return True
+    
+    def _train_with_processed_data(self, processed_data):
+        """Train with processed data (legacy version)"""
+        print("=== Starting Model Training (Legacy Mode) ===")
         
         # Extract training data
         X_train = processed_data['X_train']
@@ -127,7 +205,20 @@ class WaterQualityModel:
         
         print("=== Training Complete ===")
         
-        return self.history
+        # Evaluate on test set
+        X_test = processed_data['X_test']
+        y_test = processed_data['y_test']
+        y_test_raw = processed_data['y_test_raw']
+        
+        # Predictions
+        y_pred_proba = self.model.predict(X_test)
+        y_pred = np.argmax(y_pred_proba, axis=1)
+        
+        # Calculate metrics
+        test_accuracy = accuracy_score(y_test_raw, y_pred)
+        print(f"🎯 Test Accuracy: {test_accuracy:.4f}")
+        
+        return True
     
     def evaluate(self, processed_data):
         """Evaluate model performance"""
@@ -213,10 +304,9 @@ class WaterQualityModel:
         self.model.save(filepath)
         print(f"Model saved to {filepath}")
         
-        # Save preprocessor
+        # Save preprocessor using its own save method
         preprocessor_path = filepath.replace('.h5', '_preprocessor.pkl')
-        joblib.dump(self.preprocessor, preprocessor_path)
-        print(f"Preprocessor saved to {preprocessor_path}")
+        self.preprocessor.save_preprocessor(preprocessor_path)
     
     def load_model(self, filepath='models/water_quality_model.h5'):
         """Load saved model"""
@@ -226,8 +316,9 @@ class WaterQualityModel:
         # Load preprocessor
         preprocessor_path = filepath.replace('.h5', '_preprocessor.pkl')
         if os.path.exists(preprocessor_path):
-            self.preprocessor = joblib.load(preprocessor_path)
-            print(f"Preprocessor loaded from {preprocessor_path}")
+            self.preprocessor = WaterQualityPreprocessor.load_preprocessor(preprocessor_path)
+        else:
+            print(f"Preprocessor file {preprocessor_path} not found")
     
     def predict_single(self, tds, turbidity, ph):
         """Make prediction for a single water sample"""
@@ -256,7 +347,8 @@ def main():
     
     # Load and preprocess data
     preprocessor = WaterQualityPreprocessor()
-    df = preprocessor.load_data('data/water_quality_dataset.csv')
+    # df = preprocessor.load_data('data/water_quality_dataset.csv')
+    df = preprocessor.load_data('data/water_quality_resampled.csv')
     
     if df is None:
         print("Please run data generation first:")
