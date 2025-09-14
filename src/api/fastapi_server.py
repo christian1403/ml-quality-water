@@ -17,10 +17,20 @@ from src.models.predict import WaterQualityPredictor
 from src.utils.analysis_utils import validate_sensor_reading, get_water_quality_guidelines
 from config.config import GEMINI_CONFIG, QUALITY_LABELS
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Water Quality Prediction API",
     description="ML-powered water quality assessment for consumption safety",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # semua origin
+    allow_credentials=True,
+    allow_methods=["*"],  # semua method: GET, POST, PUT, DELETE
+    allow_headers=["*"],  # semua header
 )
 
 # Global predictor instance
